@@ -18,18 +18,26 @@ export interface SavedQuery {
   color?: string | null;
 }
 
+async function checked<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
 export async function submitQuery(question: string): Promise<QueryResponse> {
   const res = await fetch(`${BASE}/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question }),
   });
-  return res.json();
+  return checked(res);
 }
 
 export async function getSavedQueries(): Promise<SavedQuery[]> {
   const res = await fetch(`${BASE}/saved-queries`);
-  return res.json();
+  return checked(res);
 }
 
 export async function createSavedQuery(q: SavedQuery): Promise<SavedQuery> {
@@ -38,7 +46,7 @@ export async function createSavedQuery(q: SavedQuery): Promise<SavedQuery> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(q),
   });
-  return res.json();
+  return checked(res);
 }
 
 export async function updateSavedQuery(id: number, q: SavedQuery): Promise<SavedQuery> {
@@ -47,11 +55,15 @@ export async function updateSavedQuery(id: number, q: SavedQuery): Promise<Saved
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(q),
   });
-  return res.json();
+  return checked(res);
 }
 
 export async function deleteSavedQuery(id: number): Promise<void> {
-  await fetch(`${BASE}/saved-queries/${id}`, { method: 'DELETE' });
+  const res = await fetch(`${BASE}/saved-queries/${id}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${text}`);
+  }
 }
 
 export async function executeDirect(question: string, sql: string): Promise<QueryResponse> {
@@ -60,15 +72,15 @@ export async function executeDirect(question: string, sql: string): Promise<Quer
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question, sql }),
   });
-  return res.json();
+  return checked(res);
 }
 
 export async function getTables(): Promise<string[]> {
   const res = await fetch(`${BASE}/tables`);
-  return res.json();
+  return checked(res);
 }
 
 export async function getTableData(name: string): Promise<QueryResponse> {
   const res = await fetch(`${BASE}/tables/${name}`);
-  return res.json();
+  return checked(res);
 }

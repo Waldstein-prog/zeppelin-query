@@ -20,13 +20,17 @@ function App() {
   const [tables, setTables] = useState<string[]>([]);
 
   const loadSaved = useCallback(async () => {
-    const queries = await getSavedQueries();
-    setSavedQueries(queries);
+    try {
+      const queries = await getSavedQueries();
+      setSavedQueries(queries);
+    } catch (e) {
+      console.error('Failed to load saved queries:', e);
+    }
   }, []);
 
   useEffect(() => {
     loadSaved();
-    getTables().then(setTables);
+    getTables().then(setTables).catch(() => {});
   }, [loadSaved]);
 
   const handleDirectExecute = async (question: string, sql: string) => {
@@ -97,13 +101,21 @@ function App() {
   };
 
   const handleDelete = async (id: number) => {
-    await deleteSavedQuery(id);
-    await loadSaved();
+    try {
+      await deleteSavedQuery(id);
+      await loadSaved();
+    } catch (e) {
+      console.error('Failed to delete query:', e);
+    }
   };
 
   const handleUpdate = async (id: number, patch: Partial<SavedQuery> & { question: string; sql_query: string }) => {
-    await updateSavedQuery(id, patch);
-    await loadSaved();
+    try {
+      await updateSavedQuery(id, patch);
+      await loadSaved();
+    } catch (e) {
+      console.error('Failed to update query:', e);
+    }
   };
 
   return (

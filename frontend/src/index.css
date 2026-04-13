@@ -141,7 +141,7 @@ header p { color: var(--text); font-size: 0.95rem; }
   font-size: 0.9rem;
   font-weight: 700;
   color: var(--text);
-  opacity: 0.35;
+  opacity: 0.6;
   letter-spacing: 1px;
   user-select: none;
   -webkit-user-select: none;

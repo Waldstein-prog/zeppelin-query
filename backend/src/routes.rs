@@ -12,6 +12,8 @@ use crate::models::*;
 use crate::AppState;
 use crate::db::get_schema_description;
 
+const MAX_ROWS: usize = 5000;
+
 pub async fn query_nl(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
@@ -90,6 +92,9 @@ fn execute_select(
 
     let mut result = Vec::new();
     for row in rows {
+        if result.len() >= MAX_ROWS {
+            break;
+        }
         result.push(row?);
     }
 
@@ -152,8 +157,8 @@ pub async fn execute_direct(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DirectSqlRequest>,
 ) -> Json<QueryResponse> {
-    let trimmed = req.sql.trim().to_uppercase();
-    if !trimmed.starts_with("SELECT") {
+    let first_word = req.sql.trim().split_whitespace().next().unwrap_or("");
+    if !first_word.eq_ignore_ascii_case("SELECT") && !first_word.eq_ignore_ascii_case("WITH") {
         return Json(QueryResponse {
             question: req.question,
             sql: req.sql,
@@ -210,37 +215,49 @@ pub async fn list_saved_queries(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let db = state.db.lock().unwrap();
-    let mut stmt = db
-        .prepare(&format!("{} ORDER BY updated_at DESC", SELECT_SAVED))
-        .unwrap();
+    let mut stmt = match db.prepare(&format!("{} ORDER BY updated_at DESC", SELECT_SAVED)) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(Err::<Vec<SavedQuery>, String>(format!("DB error: {}", e)))),
+    };
 
     let queries: Vec<SavedQuery> = stmt
         .query_map([], |row| read_saved_query(row))
-        .unwrap()
+        .unwrap_or_else(|_| panic!("query_map failed"))
         .filter_map(|r| r.ok())
         .collect();
 
-    Json(queries)
+    (StatusCode::OK, Json(Ok(queries)))
 }
 
 pub async fn create_saved_query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SavedQuery>,
 ) -> impl IntoResponse {
+    if req.question.trim().is_empty() || req.sql_query.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(None));
+    }
+
     let db = state.db.lock().unwrap();
-    db.execute(
+    if let Err(e) = db.execute(
         "INSERT INTO saved_queries (question, sql_query, color) VALUES (?1, ?2, ?3)",
-        params![req.question, req.sql_query, req.color],
-    )
-    .unwrap();
+        params![req.question.trim(), req.sql_query.trim(), req.color],
+    ) {
+        eprintln!("DB insert error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(None));
+    }
 
     let id = db.last_insert_rowid();
-    let mut stmt = db
+    let query = db
         .prepare(&format!("{} WHERE id = ?1", SELECT_SAVED))
-        .unwrap();
+        .and_then(|mut s| s.query_row(params![id], |row| read_saved_query(row)));
 
-    let query = stmt.query_row(params![id], |row| read_saved_query(row)).unwrap();
-    (StatusCode::CREATED, Json(query))
+    match query {
+        Ok(q) => (StatusCode::CREATED, Json(Some(q))),
+        Err(e) => {
+            eprintln!("DB read error after insert: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(None))
+        }
+    }
 }
 
 pub async fn update_saved_query(
@@ -248,24 +265,37 @@ pub async fn update_saved_query(
     Path(id): Path<i64>,
     Json(req): Json<SavedQuery>,
 ) -> impl IntoResponse {
+    if req.question.trim().is_empty() || req.sql_query.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(None));
+    }
+
     let db = state.db.lock().unwrap();
-    let rows = db
-        .execute(
-            "UPDATE saved_queries SET question = ?1, sql_query = ?2, color = ?3, updated_at = datetime('now') WHERE id = ?4",
-            params![req.question, req.sql_query, req.color, id],
-        )
-        .unwrap();
+    let rows = match db.execute(
+        "UPDATE saved_queries SET question = ?1, sql_query = ?2, color = ?3, updated_at = datetime('now') WHERE id = ?4",
+        params![req.question.trim(), req.sql_query.trim(), req.color, id],
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("DB update error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(None));
+        }
+    };
 
     if rows == 0 {
         return (StatusCode::NOT_FOUND, Json(None));
     }
 
-    let mut stmt = db
+    let query = db
         .prepare(&format!("{} WHERE id = ?1", SELECT_SAVED))
-        .unwrap();
+        .and_then(|mut s| s.query_row(params![id], |row| read_saved_query(row)));
 
-    let query = stmt.query_row(params![id], |row| read_saved_query(row)).unwrap();
-    (StatusCode::OK, Json(Some(query)))
+    match query {
+        Ok(q) => (StatusCode::OK, Json(Some(q))),
+        Err(e) => {
+            eprintln!("DB read error after update: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(None))
+        }
+    }
 }
 
 pub async fn delete_saved_query(
@@ -273,13 +303,12 @@ pub async fn delete_saved_query(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     let db = state.db.lock().unwrap();
-    let rows = db
-        .execute("DELETE FROM saved_queries WHERE id = ?1", params![id])
-        .unwrap();
-
-    if rows == 0 {
-        StatusCode::NOT_FOUND
-    } else {
-        StatusCode::NO_CONTENT
+    match db.execute("DELETE FROM saved_queries WHERE id = ?1", params![id]) {
+        Ok(0) => StatusCode::NOT_FOUND,
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(e) => {
+            eprintln!("DB delete error: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }
